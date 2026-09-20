@@ -1,0 +1,22 @@
+{
+  "classifier_param": "Checkpoint/Ensemble.model",
+  "network_param_pth": "Checkpoint/mobilenet_v3_small.pth",
+  "range_of_filter": [
+    {
+      "low": [0, 137, 216],
+      "up": [15, 255, 255]
+    },
+    {
+      "low": [165, 137, 216],
+      "up": [179, 255, 255]
+    }
+  ],
+  "grad_thresh": 50,
+  "args_in_CDBPS": {
+    "minVar": 2,
+    "minRadius": 2,
+    "maxRadius": 25
+  },
+  "output_is_circle": false,
+  "structure_size": 3
+}
