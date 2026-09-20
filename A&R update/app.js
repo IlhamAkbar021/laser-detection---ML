@@ -2635,7 +2635,8 @@ async function runMLPipelineOnFrame(imgMat) {
   cv.imshow(tempCanvas, imgMat);
 
   for (let i = 0; i < contours.size(); i++) {
-    const rect = cv.boundingRect(contours.get(i));
+    const cnt = contours.get(i);
+    const rect = cv.boundingRect(cnt);
     
     // Filter ukuran geometri dasar
     if (rect.width >= 2 && rect.height >= 2 && rect.width <= 40 && rect.height <= 40) {
@@ -2649,9 +2650,21 @@ async function runMLPipelineOnFrame(imgMat) {
 
       const features = await extractFeaturesONNX(cropCanvas);
       if (predictML(features) === 1) {
-        rawCandidates.push({ cx: rect.x + rect.width / 2, cy: rect.y + rect.height / 2 });
+        
+        // MENGGUNAKAN CENTER OF MASS AGAR TITIK AKURAT DI TENGAH INTI LASER
+        const M = cv.moments(cnt);
+        let exactCx = rect.x + rect.width / 2; // Fallback default
+        let exactCy = rect.y + rect.height / 2;
+        
+        if (M.m00 !== 0) {
+          exactCx = M.m10 / M.m00;
+          exactCy = M.m01 / M.m00;
+        }
+
+        rawCandidates.push({ cx: exactCx, cy: exactCy });
       }
     }
+    cnt.delete(); // Mencegah memory leak OpenCV
   }
 
   gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
