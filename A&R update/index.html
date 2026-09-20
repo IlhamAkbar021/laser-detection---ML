@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>雷射點座標辨識工具 v2</title>
+
+<link rel="stylesheet" href="style.css">
+
+<script src="https://cdn.sheetjs.com/xlsx-0.18.5/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+<script>var Module = {};</script>
+<script async src="https://docs.opencv.org/4.8.0/opencv.js" id="opencv-script" crossorigin="anonymous"></script>
+
+</head>
+<body>
+
+<header>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="26" height="26"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+  <div><h1 data-i18n="header.title">雷射點座標辨識工具</h1><span data-i18n="header.sub">Accuracy &amp; Repeatability — Laser Coordinate Tool v2</span> <span id="build-badge" style="font-size:.7rem;opacity:.65;margin-left:6px;font-family:monospace"></span></div>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:2px;background:rgba(255,255,255,.12);border-radius:6px;padding:3px 6px">
+    <button id="lang-btn-zh" onclick="setLang('zh')" style="background:none;border:none;color:#fff;font-size:.88rem;cursor:pointer;font-weight:800;opacity:1;padding:2px 7px;border-radius:4px;letter-spacing:.03em">中</button>
+    <span style="color:rgba(255,255,255,.35);font-size:.8rem">|</span>
+    <button id="lang-btn-en" onclick="setLang('en')" style="background:none;border:none;color:#fff;font-size:.88rem;cursor:pointer;font-weight:400;opacity:0.55;padding:2px 7px;border-radius:4px;letter-spacing:.03em">EN</button>
+  </div>
+</header>
+
+<div class="steps">
+  <div class="step active" id="step-ind-1" onclick="tryGoStep(1)"><div class="step-num">1</div><span data-i18n="step.1">上傳圖片</span></div>
+  <div class="step-sep"></div>
+  <div class="step" id="step-ind-2" onclick="tryGoStep(2)"><div class="step-num">2</div><span data-i18n="step.2">檢查座標</span></div>
+  <div class="step-sep"></div>
+  <div class="step" id="step-ind-3" onclick="tryGoStep(3)"><div class="step-num">3</div><span data-i18n="step.3">輸出結果</span></div>
+</div>
+
+<div id="session-toolbar" style="position:fixed;bottom:14px;right:14px;z-index:200;display:flex;gap:6px;flex-wrap:wrap;background:rgba(255,255,255,0.94);padding:6px 8px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,0.18);max-width:calc(100vw - 28px);">
+  <button class="btn btn-outline btn-sm" id="btn-confluence" onclick="window.open('https://aeolusbot.atlassian.net/wiki/spaces/IST/pages/4147839178/Accuracy+Repeatability','_blank','noopener,noreferrer')" data-i18n="session.btn.confluence" data-i18n-title="session.tip.confluence" title="開啟 Confluence 上的完整 SOP（新分頁）">📘 Confluence</button>
+  <button class="btn btn-outline btn-sm" id="btn-sop"         onclick="openSop()"           data-i18n="session.btn.sop"         data-i18n-title="session.tip.sop"         title="操作說明書（SOP）">📖 SOP</button>
+  <button class="btn btn-outline btn-sm" id="btn-feedback"    onclick="openFeedback()"      data-i18n="session.btn.feedback"    data-i18n-title="session.tip.feedback"    title="寄信回饋給開發者">💬 回饋</button>
+  <button class="btn btn-outline btn-sm" id="btn-save-zip"    onclick="saveSessionZip()"    data-i18n="session.btn.savezip"     data-i18n-title="session.tip.savezip"     title="存成 .zip（含原圖，可完整還原）">💾 .zip</button>
+  <button class="btn btn-outline btn-sm" id="btn-save-xlsx"   onclick="saveSessionXlsx()"   data-i18n="session.btn.savexlsx"    data-i18n-title="session.tip.savexlsx"    title="存成 .xlsx（不含原圖、檔案小）">📋 .xlsx</button>
+  <button class="btn btn-outline btn-sm" id="btn-load"        onclick="document.getElementById('fi-load').click()"        data-i18n="session.btn.load"        data-i18n-title="session.tip.load"        title="讀回 .zip 或 .xlsx 存檔">📂 讀取</button>
+  <button class="btn btn-outline btn-sm" id="btn-excel-chart" onclick="document.getElementById('fi-excel-chart').click()" data-i18n="session.btn.excel2chart" data-i18n-title="session.tip.excel2chart" title="從 5 欄 Excel（jpg,x1,y1,x2,y2）直接畫 Page 3">📈 Excel→圖表</button>
+</div>
+
+<main>
+
+<div id="next-hint" class="next-hint">
+  <div class="nh-icon" id="nh-icon">👋</div>
+  <div class="nh-msg" id="nh-msg">歡迎！請拖曳照片到下方虛線框，或按「選擇圖片」開始</div>
+  <button class="btn btn-primary btn-sm nh-btn" id="nh-action" style="display:none"></button>
+</div>
+
+<div class="page active" id="page-1">
+
+  <div class="cal-panel" id="cal-panel">
+    <div class="cal-head">
+      <div class="cal-status cal-uncal" id="cal-status-wrap">
+        <div class="cal-icon" id="cal-icon">⚠️</div>
+        <div>
+          <div class="cal-title" id="cal-title" data-i18n="cal.title.unset">鏡頭校正基準：尚未設定</div>
+          <div class="cal-sub" id="cal-sub" data-i18n="cal.sub.unset">建議先設定一次鏡頭校正基準，完成後的座標軸曲線將套用至所有照片的辨識與座標計算。<br>上傳含完整座標紙的參考圖，在開啟的調整視窗中標定各參考點，再按「📐 設為鏡頭校正基準」。</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:flex-start;flex-shrink:0">
+        <input type="file" id="cal-fi" accept="image/jpeg,image/jpg,image/png" style="display:none" onchange="handleCalibFileSelect(event)">
+        <button class="btn btn-outline btn-sm" id="btn-cal-upload" data-i18n="cal.upload" onclick="document.getElementById('cal-fi').click()">📷 上傳校正參考圖</button>
+        <button class="btn btn-outline btn-sm hidden" id="btn-cal-reset" data-i18n="cal.reset" onclick="resetCalibration()">⟳ 重新校正</button>
+      </div>
+    </div>
+    <div class="cal-preview-row hidden" id="cal-preview-row">
+      <canvas id="cal-img-cv" class="cal-cv" width="260" height="170"></canvas>
+      <canvas id="cal-dist-cv" class="cal-cv" width="210" height="170"></canvas>
+      <div class="cal-poly-info" id="cal-poly-info"></div>
+    </div>
+  </div>
+
+  <div class="settings-bar" id="global-settings">
+    <div>
+      <label data-i18n="settings.k1.label">球面像差修正 k₁</label>
+      <input type="number" id="g-k1" value="0" step="0.05" min="-0.8" max="0.8" style="width:80px">
+      <span class="tip" data-i18n="settings.k1.tip">廣角鏡頭桶形畸變：k₁ = 負值修正（如 −0.2 到 −0.5）；0 = 不修正</span>
+    </div>
+    <div>
+      <label data-i18n="settings.laserR.label">雷射半徑補償 (cm)</label>
+      <input type="number" id="g-laserR" value="0" step="0.0625" min="0" max="0.5" style="width:80px">
+      <span class="tip" data-i18n="settings.laserR.tip">光斑中心 → 命中點半徑偏移；0 = 不補償</span>
+    </div>
+    <div>
+      <label data-i18n="settings.autorot.label">自動翻轉偵測</label>
+      <select id="g-autorot">
+        <option value="1" data-i18n="settings.autorot.on">啟用（偵測 180° 倒置）</option>
+        <option value="0" data-i18n="settings.autorot.off">停用</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="upload-zone" id="drop-zone">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    <h2 data-i18n="upload.h2">拖曳或點擊選擇 JPG 圖片</h2>
+    <p data-i18n="upload.p">最多 30 張 ｜ 每格 2.5mm ｜ 座標單位 cm ｜ 最小精度 0.125 cm</p>
+    <br>
+    <button class="btn btn-primary" data-i18n="upload.btn" onclick="document.getElementById('fi').click()">選擇圖片</button>
+    <input type="file" id="fi" accept="image/jpeg,image/jpg,image/png" multiple>
+  </div>
+
+  <div class="action-bar hidden" id="action-bar">
+    <span class="counter"><span data-i18n="action.loaded">已載入</span> <strong id="file-count">0</strong> <span data-i18n="action.of30">/ 30 張</span></span>
+    <button class="btn btn-outline btn-sm" data-i18n="action.add" onclick="document.getElementById('fi').click()">＋ 新增</button>
+    <button class="btn btn-primary" id="btn-detect" data-i18n="action.detect" onclick="runDetection()">▶ 自動辨識全部</button>
+    <button class="btn btn-outline btn-sm" data-i18n="action.clear" onclick="clearAll()">清除全部</button>
+  </div>
+
+  <input type="file" id="fi-load"        accept=".zip,.xlsx" style="display:none" onchange="loadSessionFromInput(event)">
+  <input type="file" id="fi-excel-chart" accept=".xlsx"      style="display:none" onchange="loadExcelToChartFromInput(event)">
+
+  <div class="progress-wrap hidden" id="prog-wrap">
+    <div class="progress-label"><span id="prog-text">處理中...</span><span id="prog-pct">0%</span></div>
+    <div class="progress-bar"><div class="progress-fill" id="prog-fill" style="width:0%"></div></div>
+    <div class="progress-sub" id="prog-sub"></div>
+  </div>
+
+  <div class="file-grid" id="file-grid"></div>
+</div>
+
+<div class="page" id="page-2">
+  <div class="toolbar">
+    <h2 data-i18n="p2.title">座標審閱與編輯</h2>
+    <span class="note" data-i18n="p2.note">雙擊座標格可直接編輯 ｜ 點擊縮圖可開啟手動校正視窗</span>
+    <button class="btn btn-outline btn-sm" data-i18n="p2.back" onclick="goStep(1)">← 返回</button>
+  </div>
+  <div class="table-wrap">
+    <table id="coord-table">
+      <thead><tr>
+        <th data-i18n="p2.th.no">編號</th><th>x1 (cm)</th><th>y1 (cm)</th>
+        <th>x2 (cm)</th><th>y2 (cm)</th>
+        <th data-i18n="p2.th.status">狀態</th><th data-i18n="p2.th.rot">旋轉</th><th data-i18n="p2.th.fname">原圖檔名</th><th data-i18n="p2.th.img">原圖</th><th data-i18n="p2.th.saved">儲存</th>
+      </tr></thead>
+      <tbody id="coord-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="page" id="page-3">
+  <div class="toolbar">
+    <h2 data-i18n="p3.title">輸出結果</h2>
+    <button class="btn btn-outline btn-sm" data-i18n="p3.back" onclick="goStep(2)">← 返回</button>
+    <span id="p3-summary-text" class="counter" style="flex:1;text-align:center"></span>
+    <button class="btn btn-outline btn-sm" data-i18n="p3.dl.chart" onclick="downloadChart()">⬇ 下載分析圖 (PNG)</button>
+    <button class="btn btn-green" data-i18n="p3.dl.excel" onclick="exportExcel()">⬇ 下載 Excel</button>
+    <button class="btn btn-outline btn-sm" data-i18n="p3.iso.sheet" data-i18n-title="p3.iso.sheet.tip" onclick="window.open('https://docs.google.com/spreadsheets/d/1o-OzwP3tiEaV9XwZQczGO8z7V_rFb0XVqk3HXw7aedg/edit?gid=1990766678#gid=1990766678','_blank','noopener,noreferrer')" title="開啟 ISO Lab Recording Sheet（Google Sheets 新分頁）">📊 打開 ISO Lab Recording Sheet</button>
+  </div>
+
+  <div id="p3-grid" class="p3-grid"></div>
+
+  <div style="margin-top:28px;border-top:2px solid var(--border);padding-top:18px">
+    <div class="toolbar" style="margin-bottom:12px">
+      <h2 style="font-size:.95rem" data-i18n="p3.analysis.title">準確度與重複性分析</h2>
+    </div>
+    <div class="analysis-layout">
+      <div>
+        <div class="analysis-panel">
+          <h3 data-i18n="p3.settings.h3">分析設定</h3>
+          <div class="param-group">
+            <label><span data-i18n="p3.testid.label">圖表標題 ID</span> <span class="note" data-i18n="p3.testid.note" style="font-style:normal">（如 AC3110-EVT2-18）</span></label>
+            <input type="text" id="test-id" value="" placeholder="AC3110-EVT2-XX" oninput="drawChart()">
+          </div>
+          <div class="param-group">
+            <label data-i18n="p3.plotmode.label">繪製座標</label>
+            <select id="plot-mode" onchange="drawChart()">
+              <option value="x2y2" data-i18n="p3.plotmode.x2y2">x2 / y2（右側雷射點）</option>
+              <option value="x1y1" data-i18n="p3.plotmode.x1y1">x1 / y1（左側雷射點）</option>
+              <option value="mid" selected data-i18n="p3.plotmode.mid">中點 ((x1+x2)/2, (y1+y2)/2)</option>
+            </select>
+          </div>
+          <div class="param-group"><label data-i18n="p3.refx.label">參考點 X (cm)</label><input type="number" id="ref-x" value="3" step="0.125" onchange="drawChart()"></div>
+          <div class="param-group"><label data-i18n="p3.refy.label">參考點 Y (cm)</label><input type="number" id="ref-y" value="0" step="0.125" onchange="drawChart()"></div>
+          <div class="param-group"><label data-i18n="p3.accthresh.label">準確度容忍值 (cm)</label><input type="number" id="acc-thresh" value="5" step="0.1" onchange="drawChart()"></div>
+          <div class="param-group">
+            <label><span data-i18n="p3.customrp.label">自訂 Rp 容忍值 (cm)</span> <span class="note" data-i18n="p3.customrp.note" style="font-style:normal">— 留空則自動計算 (mean + 3σ)</span></label>
+            <input type="number" id="custom-rp" value="" step="0.01" min="0.01" placeholder="自動" data-i18n="p3.customrp.ph" data-i18n-attr="placeholder" onchange="drawChart()">
+          </div>
+        </div>
+        <div class="analysis-panel mt-3">
+          <h3 data-i18n="p3.stats.h3">統計結果</h3>
+          <div class="stat-grid">
+            <div class="stat-box"><div class="val" id="sv-n">—</div><div class="lbl" data-i18n="p3.stats.n">有效點數</div></div>
+            <div class="stat-box" id="stat-ap"><div class="val" id="sv-ap">—</div><div class="lbl" data-i18n="p3.stats.ap">準確度 Ap (cm)</div></div>
+            <div class="stat-box" id="stat-rp"><div class="val" id="sv-rp">—</div><div class="lbl" data-i18n="p3.stats.rp">重複性 Rp (cm)</div></div>
+            <div class="stat-box" id="stat-pass"><div class="val" id="sv-pass">—</div><div class="lbl" data-i18n="p3.stats.pass">通過準確度</div></div>
+            <div class="stat-box"><div class="val" id="sv-ao">—</div><div class="lbl">Ao (°)</div></div>
+            <div class="stat-box"><div class="val" id="sv-ro">—</div><div class="lbl">Ro ± (°)</div></div>
+          </div>
+          <div id="stat-detail" style="font-size:.73rem;color:var(--gray);margin-top:8px;line-height:1.8"></div>
+        </div>
+      </div>
+      <div class="chart-wrap" style="padding:8px">
+        <canvas id="chart-canvas" width="900" height="900" style="width:100%;height:auto"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<div class="modal-bg" id="modal-bg" onclick="closeModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <h3 id="modal-title">圖片調整</h3>
+      <span class="note" id="modal-nav-info"></span>
+      <button class="btn btn-outline btn-sm" data-i18n="modal.prev" onclick="modalNav(-1)">‹ 上一張</button>
+      <button class="btn btn-outline btn-sm" data-i18n="modal.next" onclick="modalNav(1)">下一張 ›</button>
+      <button class="btn btn-outline btn-sm" id="btn-modal-rot" data-i18n="modal.rot180" onclick="toggleModalRotation()">↻ 旋轉180°</button>
+      <div class="zoom-bar">
+        <button onclick="zoomModal(-1)" data-i18n-title="modal.zoom.out" title="縮小 (−)">−</button>
+        <span id="zoom-level">100%</span>
+        <button onclick="zoomModal(1)"  data-i18n-title="modal.zoom.in"  title="放大 (+)">+</button>
+        <button onclick="fitZoom()"     data-i18n-title="modal.zoom.fit" title="適合視窗" style="font-size:.72rem;padding:2px 6px">Fit</button>
+      </div>
+      <button onclick="closeModal()" style="background:none;border:none;font-size:1.3rem;cursor:pointer;color:var(--gray);padding:0 4px">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-canvas-wrap" id="modal-canvas-wrap"><div class="modal-canvas-inner" id="modal-canvas-inner"><canvas id="modal-canvas"></canvas></div></div>
+      <div class="modal-sidebar">
+        <div class="sidebar-section">
+          <h4 data-i18n="modal.ops.h4">操作模式</h4>
+          <div class="mode-btns">
+            <button class="mode-btn" id="mode-auto" data-i18n="modal.mode.auto" onclick="setMode('auto')">🔍 自動重新偵測</button>
+            <button class="mode-btn active" id="mode-origin" data-i18n="modal.mode.origin" onclick="setMode('origin')">⊕ 設定原點（十字交叉）</button>
+            <button class="mode-btn" id="mode-p1" data-i18n="modal.mode.p1" onclick="setMode('p1')">● 設定雷射點 1（左）</button>
+            <button class="mode-btn" id="mode-p2" data-i18n="modal.mode.p2" onclick="setMode('p2')">● 設定雷射點 2（右）</button>
+
+            <div id="cal-lock-notice" data-i18n="modal.cal.lock" style="display:none;margin:6px 0 2px;padding:7px 9px;background:#fef9c3;border:1px solid #fbbf24;border-radius:6px;font-size:.72rem;color:#92400e;line-height:1.6">
+              🔒 <strong>座標軸已鎖定</strong>（第一頁校正基準）<br>
+              僅可<b>拖動原點</b>平移 或 <b>拖動旋轉把手</b>（X軸末端綠圓）旋轉整個座標系<br>
+              參考點相對位置固定，不可個別移動
+            </div>
+
+            <div id="ref-mode-section">
+              <div style="border-top:1px dashed var(--border);margin:3px 0"></div>
+              <div class="ref-row"><button class="mode-btn" id="mode-rn6"  onclick="setMode('rn6')"  style="color:#0e7490">◎ (−6, 0)</button><button class="skip-ref-btn" id="skip-modalRefNeg6"  onclick="skipRef('modalRefNeg6','rn6')" title="FOV視野外，略過此點" data-i18n="modal.fov" data-i18n-title="modal.fov.title">FOV外</button></div>
+              <div class="ref-row"><button class="mode-btn" id="mode-rn3"  onclick="setMode('rn3')"  style="color:#0891b2">◎ (−3, 0)</button><button class="skip-ref-btn" id="skip-modalRefNeg3"  onclick="skipRef('modalRefNeg3','rn3')" title="FOV視野外，略過此點" data-i18n="modal.fov" data-i18n-title="modal.fov.title">FOV外</button></div>
+              <div class="ref-row"><button class="mode-btn" id="mode-r1"   onclick="setMode('r1')"   style="color:#b45309">◎ ( 3, 0)</button><button class="skip-ref-btn" id="skip-modalRefR1"    onclick="skipRef('modalRefR1','r1')"   title="FOV視野外，略過此點" data-i18n="modal.fov" data-i18n-title="modal.fov.title">FOV外</button></div>
+              <div class="ref-row"><button class="mode-btn" id="mode-r2"   onclick="setMode('r2')"   style="color:#7c3aed">◎ ( 6, 0)</button><button class="skip-ref-btn" id="skip-modalRefR2"    onclick="skipRef('modalRefR2','r2')"   title="FOV視野外，略過此點" data-i18n="modal.fov" data-i18n-title="modal.fov.title">FOV外</button></div>
+              <div class="ref-row"><button class="mode-btn" id="mode-r0n6" onclick="setMode('r0n6')" style="color:#9f1239">◎ (0, −6)</button><button class="skip-ref-btn" id="skip-modalRef0Neg6" onclick="skipRef('modalRef0Neg6','r0n6')" title="FOV視野外，略過此點" data-i18n="modal.fov" data-i18n-title="modal.fov.title">FOV外</button></div>
+              <div class="ref-row"><button class="mode-btn" id="mode-r0n3" onclick="setMode('r0n3')" style="color:#dc2626">◎ (0, −3)</button><button class="skip-ref-btn" id="skip-modalRef0Neg3" onclick="skipRef('modalRef0Neg3','r0n3')" title="FOV視野外，略過此點" data-i18n="modal.fov" data-i18n-title="modal.fov.title">FOV外</button></div>
+              <div class="ref-row"><button class="mode-btn" id="mode-r03"  onclick="setMode('r03')"  style="color:#059669">◎ (0,  3)</button><button class="skip-ref-btn" id="skip-modalRef0_3"   onclick="skipRef('modalRef0_3','r03')"  title="FOV視野外，略過此點" data-i18n="modal.fov" data-i18n-title="modal.fov.title">FOV外</button></div>
+              <div class="ref-row"><button class="mode-btn" id="mode-r06"  onclick="setMode('r06')"  style="color:#047857">◎ (0,  6)</button><button class="skip-ref-btn" id="skip-modalRef0_6"   onclick="skipRef('modalRef0_6','r06')"  title="FOV視野外，略過此點" data-i18n="modal.fov" data-i18n-title="modal.fov.title">FOV外</button></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="coord-display">
+          <label data-i18n="modal.coords.label">座標值 (cm) — 雙擊數字可修改</label>
+          <div class="coord-row">
+            <div class="coord-input-group"><span>x1</span><input type="number" id="m-x1" step="0.125" onchange="applyManual()"></div>
+            <div class="coord-input-group"><span>y1</span><input type="number" id="m-y1" step="0.125" onchange="applyManual()"></div>
+          </div>
+          <div class="coord-row">
+            <div class="coord-input-group"><span>x2</span><input type="number" id="m-x2" step="0.125" onchange="applyManual()"></div>
+            <div class="coord-input-group"><span>y2</span><input type="number" id="m-y2" step="0.125" onchange="applyManual()"></div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <h4 data-i18n="modal.axis.h4">軸向校正資訊</h4>
+          <div id="axis-u-info" data-i18n="modal.axis.x.default" style="font-size:.72rem;color:var(--gray);line-height:1.8">X軸: 使用預設（水平）</div>
+          <div id="axis-v-info" data-i18n="modal.axis.y.default" style="font-size:.72rem;color:var(--gray);line-height:1.8">Y軸: 使用預設（垂直）</div>
+        </div>
+
+        <div class="sidebar-section">
+          <h4 data-i18n="modal.scale.h4">比例尺 / 格線</h4>
+          <div class="sidebar-input-row">
+            <span data-i18n="modal.scale.pxcm">px/cm:</span>
+            <input type="number" id="m-scale" step="1" min="1" placeholder="自動" data-i18n="modal.scale.ph" data-i18n-attr="placeholder" onchange="applyScale()">
+          </div>
+          <div class="sidebar-input-row">
+            <span data-i18n="modal.scale.gridlines">偵測到的格線數:</span>
+            <span id="m-grid-info" style="color:var(--blue);font-weight:600">—</span>
+          </div>
+          <div class="sidebar-input-row">
+            <span data-i18n="modal.k1">k₁ 修正:</span>
+            <input type="number" id="m-k1" step="0.05" value="0" placeholder="0" onchange="refreshModalCoords()">
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <h4 data-i18n="modal.fisheye.h4">魚眼曲率校正</h4>
+          <div class="fisheye-row"><span data-i18n="modal.fisheye.kx">X 軸曲率 (kx)</span><span class="k-badge" id="kx-badge">0.000</span></div>
+          <canvas id="fisheye-x-cv" class="fisheye-cv" width="220" height="72"></canvas>
+          <div class="fisheye-row"><span data-i18n="modal.fisheye.ky">Y 軸曲率 (ky)</span><span class="k-badge" id="ky-badge">0.000</span></div>
+          <canvas id="fisheye-y-cv" class="fisheye-cv" width="220" height="72"></canvas>
+          <div style="display:flex;gap:6px;margin-top:7px">
+            <button class="btn btn-outline btn-sm" style="flex:1;font-size:.72rem" data-i18n="modal.fisheye.reset" onclick="resetFisheye()">⟳ 重置曲率</button>
+          </div>
+          <div style="font-size:.67rem;color:var(--gray);margin-top:4px;line-height:1.5" data-i18n="modal.fisheye.tip">
+            上拖 = 桶形校正 下拖 = 枕形校正<br>曲線=橙色、對角線=無失真
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <h4 data-i18n="modal.legend.h4">圖例</h4>
+          <div class="legend-item"><span class="legend-dot" style="background:#22c55e;border-color:#15803d"></span><span data-i18n="modal.legend.origin">原點 (0,0)</span></div>
+          <div class="legend-item"><span class="legend-dot" style="background:#3b82f6;border-color:#1e40af"></span><span data-i18n="modal.legend.p1">雷射點 1</span></div>
+          <div class="legend-item"><span class="legend-dot" style="background:#ef4444;border-color:#b91c1c"></span><span data-i18n="modal.legend.p2">雷射點 2</span></div>
+          <div class="legend-item"><span class="legend-dot" style="background:#fbbf24;border-color:#d97706;border-style:dashed"></span><span data-i18n="modal.legend.ref.est">預計 R1/R2 位置</span></div>
+          <div class="legend-item"><span class="legend-dot" style="background:#d97706;border-color:#92400e"></span><span data-i18n="modal.legend.r1">R1 (3,0) 已確認</span></div>
+          <div class="legend-item"><span class="legend-dot" style="background:#7c3aed;border-color:#4c1d95"></span><span data-i18n="modal.legend.r2">R2 (6,0) 已確認</span></div>
+          <div class="legend-item"><span style="display:inline-block;width:22px;height:2px;background:rgba(99,102,241,.5);border-top:1px dashed #6366f1"></span><span data-i18n="modal.legend.grid">座標格線</span></div>
+        </div>
+
+        <div class="dist-check" id="dist-check" data-i18n="modal.dist">P1↔P2 距離: —</div>
+        <div class="cursor-info" id="cursor-coord" data-i18n="modal.cursor">游標位置: —</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-outline btn-sm" data-i18n="modal.cancel" onclick="closeModal()">取消</button>
+      <button class="btn-cal-set" id="btn-set-cal" data-i18n="modal.setcal" data-i18n-title="modal.setcal.tip" onclick="saveAsCalibration()" title="將目前的座標軸曲線儲存為鏡頭校正基準，套用至所有照片">📐 設為鏡頭校正基準</button>
+      <button class="btn btn-green" data-i18n="modal.save" onclick="saveModal()">✔ 儲存此張</button>
+    </div>
+  </div>
+</div>
+
+<div id="fb-bg" class="fb-bg" onclick="closeFeedback(event)">
+  <div class="fb-modal" onclick="event.stopPropagation()">
+    <div class="fb-head">
+      <h2>💬 使用者回饋 / User Feedback</h2>
+      <button class="fb-close" onclick="closeFeedback(event)" title="關閉 / Close">✕</button>
+    </div>
+    <div class="fb-body">
+      <p style="font-size:.85rem;color:#475569;margin-bottom:6px">遇到問題或建議？歡迎留言給開發者 <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px">eric.weng@aeolusbot.com</code></p>
+      <p style="font-size:.78rem;color:#94a3b8;margin-bottom:10px"><em>Found a bug or have a suggestion? Send a message to the developer.</em></p>
+
+      <label for="fb-name">姓名 <span class="en">Name</span><span class="req">*</span></label>
+      <input type="text" id="fb-name" placeholder="您的姓名 / Your name" maxlength="40">
+
+      <label for="fb-email">回信信箱 <span class="en">Reply email (optional)</span></label>
+      <input type="email" id="fb-email" placeholder="someone@example.com" maxlength="80">
+
+      <div class="fb-row2">
+        <div>
+          <label for="fb-category">類別 <span class="en">Category</span></label>
+          <select id="fb-category" onchange="_fbSyncSubject()">
+            <option value="Bug">🐛 Bug（程式錯誤）</option>
+            <option value="Feature">💡 建議 / Feature request</option>
+            <option value="Question">❓ 問題 / Question</option>
+            <option value="Other">📝 其他 / Other</option>
+          </select>
+        </div>
+        <div>
+          <label for="fb-severity">嚴重度 <span class="en">Severity</span></label>
+          <select id="fb-severity">
+            <option value="High">🔴 嚴重 / High</option>
+            <option value="Medium" selected>🟡 中等 / Medium</option>
+            <option value="Low">🟢 輕微 / Low</option>
+          </select>
+        </div>
+      </div>
+
+      <label for="fb-subject">主題 <span class="en">Subject</span></label>
+      <input type="text" id="fb-subject" maxlength="100" oninput="this.dataset.userEdited='1'">
+
+      <label for="fb-desc">詳細說明 <span class="en">Description</span><span class="req">*</span></label>
+      <textarea id="fb-desc" placeholder="請描述您遇到的問題或建議 / Describe the issue or suggestion" rows="4"></textarea>
+
+      <label for="fb-repro">重現步驟（可選）<span class="en">Steps to reproduce (optional)</span></label>
+      <textarea id="fb-repro" placeholder="例：1. 上傳 5 張 → 2. 點自動辨識 → 3. ...&#10;e.g. 1. Upload 5 images → 2. Click auto-detect → 3. ..." rows="3"></textarea>
+
+      <div class="fb-info">
+        ℹ️ 送出時會自動附帶系統資訊（瀏覽器、目前頁面、照片數、校正／辨識狀態）方便開發者追問題。<br>
+        <em>System info (browser, page, file count, calibration / detection status) will be attached automatically.</em><br><br>
+        📧 按下「送出」後，會以 <code>mailto:</code> 方式開啟您的郵件程式。請於郵件中按「傳送」完成提交。<br>
+        <em>Submitting opens your mail client via <code>mailto:</code>. Please click "Send" in the draft to complete submission.</em>
+      </div>
+    </div>
+    <div class="fb-actions">
+      <button class="btn btn-outline btn-sm" onclick="closeFeedback(event)">取消 / Cancel</button>
+      <button class="btn btn-primary btn-sm" style="background:#0f766e" onclick="submitFeedback()">📨 送出 / Submit</button>
+    </div>
+  </div>
+</div>
+
+<div id="sop-bg" class="sop-bg" onclick="closeSop(event)">
+  <div class="sop-modal" onclick="event.stopPropagation()">
+    <div class="sop-head">
+      <h2>📖 SOP — 雷射點座標辨識工具 / Laser Coordinate Tool</h2>
+      <button class="sop-close" onclick="closeSop(event)" title="關閉 / Close">✕</button>
+    </div>
+    <div class="sop-body">
+
+      <div class="sop-toc">
+        <strong>目錄 / Contents</strong>
+        <a href="#sop-rev">1. 修訂紀錄 / Revision Note</a>
+        <a href="#sop-title">2. 測試名稱 / Test Title</a>
+        <a href="#sop-purpose">3. 測試目的 / Test Purpose</a>
+        <a href="#sop-equip">4. 測試用設備 / Test Equipment</a>
+        <a href="#sop-prereq">5. 前置作業 / General Requirement before testing</a>
+        <a href="#sop-proc">6. 測試步驟 / Test Procedure</a>
+        <a href="#sop-upload">7. 測試結果上傳 / Test Result Uploading</a>
+        <a href="#sop-trouble">8. 故障排除 / Trouble Shooting</a>
+      </div>
+
+      <section id="sop-rev" class="sop-section">
+        <h3>1. 修訂紀錄 / Revision Note</h3>
+        <table class="sop-table">
+          <thead><tr><th>Release version</th><th>Release date</th><th>Change note</th><th>SOP editor</th><th>Reviewer</th></tr></thead>
+          <tbody>
+            <tr><td>1.0</td><td>2026-05-07</td><td>Initial release</td><td>—</td><td>—</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="sop-title" class="sop-section">
+        <h3>2. 測試名稱 / Test Title</h3>
+        <p><strong>雷射點座標辨識與準確度／重複性量測 / Laser Spot Coordinate Detection &amp; Accuracy/Repeatability Measurement</strong></p>
+        <table class="sop-table sop-meta-tbl">
+          <tr><th>Version 版本</th><td>1.0</td></tr>
+          <tr><th>Update date 更新日期</th><td>2026-05-07</td></tr>
+          <tr><th>Department 負責單位</th><td>Product Performance team</td></tr>
+          <tr><th>Test Plan 測試計劃書</th><td>Laser device A&amp;R measurement plan</td></tr>
+          <tr><th>Test Plan Owner 測試計劃負責人</th><td>—</td></tr>
+          <tr><th>SOP Owner SOP 負責人</th><td>—</td></tr>
+          <tr><th>Reviewer 審核人</th><td>—</td></tr>
+        </table>
+      </section>
+
+      <section id="sop-purpose" class="sop-section">
+        <h3>3. 測試目的 / Test Purpose</h3>
+        <p>透過自動辨識照片中的雷射打點與座標紙標定點位置，量化雷射裝置的<strong>準確度（Accuracy）</strong>與<strong>重複性（Repeatability）</strong>，取代人工讀數以降低主觀誤差。</p>
+        <p class="sop-en"><em>Automatically detect laser spot positions and coordinate paper reference markers in photos to quantify the laser device's <strong>accuracy</strong> and <strong>repeatability</strong>, replacing manual reading to reduce subjective error.</em></p>
+      </section>
+
+      <section id="sop-equip" class="sop-section">
+        <h3>4. 測試用設備 / Test Equipment</h3>
+        <table class="sop-table">
+          <thead><tr><th>項目 / Item</th><th>規格 / Spec</th></tr></thead>
+          <tbody>
+            <tr><td>雷射裝置（待測）/ Laser device (DUT)</td><td>依測試計劃書 / Per test plan</td></tr>
+            <tr><td>座標紙 / Coordinate paper</td><td>2.5 mm 格、含橘色 Y 軸／黑色 X 軸／8 個彩色標定點 / 2.5 mm grid with orange Y-axis, black X-axis, 8 colored reference markers</td></tr>
+            <tr><td>拍攝相機 / Camera</td><td>解析度 ≥ 1920×1080 / ≥1920×1080 resolution</td></tr>
+            <tr><td>觀景窗 / Optical viewer (optional)</td><td>用於透鏡組裝下打雷射時可見光斑 / For viewing laser through lens assembly</td></tr>
+            <tr><td>電腦 + 瀏覽器 / PC + browser</td><td>Chrome / Edge / Safari 最新版（支援 OpenCV.js / WebAssembly）</td></tr>
+            <tr><td>本工具 / This tool</td><td><code>laser-coord-tool.html</code> 或 <code>laser-coord-tool-standalone.html</code></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="sop-prereq" class="sop-section">
+        <h3>5. 前置作業 / General Requirement before testing</h3>
+        <ol>
+          <li>確認座標紙平整無皺褶、無污損 / Ensure coordinate paper is flat, unwrinkled, and clean</li>
+          <li>確認雷射裝置穩定固定（拍攝過程中不可晃動）/ Ensure laser device is stably mounted</li>
+          <li>環境光不要過亮，避免反光蓋過雷射核心；也不可過暗造成標定點 hue 偏移 / Avoid overly bright or dim lighting</li>
+          <li>拍攝時整張座標紙（含 8 個彩色標定點）完整在畫面內 / Whole coordinate paper fully visible in frame</li>
+          <li>相機對焦清晰、沒有明顯動態模糊 / Camera focused; no motion blur</li>
+          <li>同一批測試的所有照片建議保持相同視角／距離 / Keep camera angle and distance consistent</li>
+          <li>建議首次或更換鏡頭後拍一張<strong>校正參考圖</strong> / Take one calibration reference image on first use or after lens change</li>
+        </ol>
+      </section>
+
+      <section id="sop-proc" class="sop-section">
+        <h3>6. 測試步驟 / Test Procedure</h3>
+
+        <h4>Step 1 — 上傳照片 / Upload images</h4>
+        <ol>
+          <li>用瀏覽器開啟工具網頁 / Open the tool in browser</li>
+          <li>Page 1（上傳圖片）將照片拖曳到虛線框，或按「選擇圖片」/ Drag photos or click "Select Images"</li>
+          <li>單次最多 30 張 / Up to 30 images per session</li>
+          <li>右下角浮動橫幅會顯示下一步建議 / Bottom-right banner shows next-step suggestion</li>
+        </ol>
+
+        <h4>Step 2 — 鏡頭校正（強建議）/ Lens calibration (strongly recommended)</h4>
+        <ol>
+          <li>按 Page 1 頂部「📷 上傳校正參考圖」/ Click "📷 Upload Calibration Reference"</li>
+          <li>選擇校正參考圖 → modal 自動開啟 / Select reference image → modal opens</li>
+          <li>標定原點 (0,0)、R1 (3,0)、R2 (6,0) 等已知點位 / Mark origin, R1, R2 reference points</li>
+          <li>按「📐 設為鏡頭校正基準」/ Click "📐 Set as Lens Calibration"</li>
+          <li>校正圖會自動隱藏，不算入 30 張工作集 / Cal-ref auto-hidden, not counted toward 30</li>
+          <li>校正資料會被「💾 .zip」存檔保留 / Calibration preserved by .zip save</li>
+        </ol>
+
+        <h4>Step 3 — 自動辨識 / Auto-detection</h4>
+        <ol>
+          <li>確認校正完成（橫幅變黃色 ⚡）/ Confirm calibration set (yellow ⚡)</li>
+          <li>按「▶ 自動辨識全部」/ Click "▶ Auto-detect All"</li>
+          <li>等候進度條完成 / Wait for progress bar</li>
+          <li>完成後自動跳到 Page 2 / Auto-jumps to Page 2 when done</li>
+        </ol>
+
+        <h4>Step 4 — 逐張審閱與微調 / Per-image review and fine-tune</h4>
+        <ol>
+          <li>Page 2 縮圖直接顯示偵測結果：<br>
+            • <span style="color:#ca8a04">黃色十字</span> = 偵測到的原點 (0,0)<br>
+            • <span style="color:#3b82f6">藍色圈</span> = 雷射 P1（左）<br>
+            • <span style="color:#ef4444">紅色圈</span> = 雷射 P2（右）<br>
+            <em class="sop-en">Yellow cross = origin; Blue = Laser P1 (left); Red = Laser P2 (right)</em>
+          </li>
+          <li>掃過全部縮圖，確認對準位置 / Scan all thumbnails</li>
+          <li>需微調者點該縮圖開啟 modal / Click thumbnail to open modal</li>
+          <li>modal 內可拖曳重設原點、雷射點、座標軸 / Drag to reset positions in modal</li>
+          <li>確認後按「儲存」標記為手動確認 / Click "Save" to mark as manually saved</li>
+          <li>已手動確認的張數重跑時會被略過 / Manually-saved images are skipped on next run</li>
+        </ol>
+
+        <h4>Step 5 — 前往輸出 / Go to output</h4>
+        <ol>
+          <li>按「下一步：輸出結果 →」/ Click "Next: Output →"</li>
+          <li>系統跳出確認視窗 / Confirmation dialog appears</li>
+          <li>確認後進入 Page 3 / Proceed to Page 3</li>
+        </ol>
+      </section>
+
+      <section id="sop-upload" class="sop-section">
+        <h3>7. 測試結果上傳 / Test Result Uploading</h3>
+        <p>Page 3（輸出結果）會自動產生以下內容：</p>
+        <p class="sop-en"><em>Page 3 (Output) automatically generates the following:</em></p>
+        <ul>
+          <li>每張圖的標註結果卡片（原點 + P1 + P2）/ Per-image annotated cards</li>
+          <li>散布圖：所有 R1/R2 + 平均中心 + 容差圓 + 重複性圓 / Scatter chart with tolerance circles</li>
+          <li>統計：Accuracy %, Ap, Rp, 評等 / Statistics: Accuracy %, Ap, Rp, rating</li>
+        </ul>
+        <p><strong>下載格式 / Export formats：</strong></p>
+        <table class="sop-table">
+          <thead><tr><th>輸出 / Output</th><th>格式 / Format</th><th>用途 / Purpose</th></tr></thead>
+          <tbody>
+            <tr><td>⬇ 下載分析圖</td><td>PNG</td><td>納入測試報告 / Test report</td></tr>
+            <tr><td>⬇ 下載 Excel</td><td>.xlsx（5 欄）</td><td>歷史資料／統計 / Historical data</td></tr>
+            <tr><td>💾 .zip</td><td>.zip 含原圖 / Includes images</td><td>下次讀回繼續 / Resume later</td></tr>
+            <tr><td>📋 .xlsx</td><td>.xlsx 純參數 / Parameters only</td><td>輕量備份 / Lightweight backup</td></tr>
+          </tbody>
+        </table>
+        <p>請依公司資料管理規範存放／上傳 / Save per company data policy.</p>
+      </section>
+
+      <section id="sop-trouble" class="sop-section">
+        <h3>8. 故障排除 / Trouble Shooting</h3>
+        <table class="sop-table">
+          <thead><tr><th>症狀 / Symptom</th><th>可能原因 / Likely cause</th><th>處理方式 / Resolution</th></tr></thead>
+          <tbody>
+            <tr><td>原點偏移、不在十字上<br><em class="sop-en">Origin offset</em></td><td>紙張畸變、彩色 marker 漏抓 / Paper distortion, marker miss</td><td>modal 手動拖曳原點 / Drag origin in modal</td></tr>
+            <tr><td>雷射點抓錯位置<br><em class="sop-en">Wrong laser spot</em></td><td>marker 被誤認為雷射 / Marker confused as laser</td><td>modal 手動拖曳 / Manually drag</td></tr>
+            <tr><td>自動辨識卡 0% 不動<br><em class="sop-en">Detection stuck at 0%</em></td><td>該圖 dataUrl 為 null（從 .xlsx 讀回）/ Image data missing</td><td>重新上傳同名照片 / Re-upload</td></tr>
+            <tr><td>校正設定後沒效果<br><em class="sop-en">Calibration ineffective</em></td><td>k₁ 沒設、未正確標定 / k₁ unset, refs unmarked</td><td>檢查 k₁、重做 Step 2 / Check k₁, redo Step 2</td></tr>
+            <tr><td>Page 3 圖表沒資料<br><em class="sop-en">Page 3 chart empty</em></td><td>多張 confidence='unclear' / Many NaN rows</td><td>回 Page 2 修紅色標籤列 / Fix red rows</td></tr>
+            <tr><td>校正圖跑進工作集<br><em class="sop-en">Cal-ref in working set</em></td><td>—（已修正：自動隱藏）/ Already fixed: auto-hidden</td><td>無需處理 / No action</td></tr>
+            <tr><td>瀏覽器原生彈窗按鈕只有 OS 語言<br><em class="sop-en">OS-controlled OK/Cancel</em></td><td>瀏覽器限制 / Browser limitation</td><td>訊息已標注【確定/OK】=…、【取消/Cancel】=… / Bilingual button mapping in messages</td></tr>
+            <tr><td>讀大型 .zip 後卡頓<br><em class="sop-en">Slow after large .zip</em></td><td>原圖太多／太大 / Too many large images</td><td>重整頁面、改用 .xlsx 純參數 / Refresh, use .xlsx</td></tr>
+            <tr><td>離線環境讀 .zip 失敗<br><em class="sop-en">Offline .zip load fails</em></td><td>主檔 CDN 但無網路 / Main file with no internet</td><td>改用 standalone HTML（內嵌 JSZip）/ Use standalone HTML</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
